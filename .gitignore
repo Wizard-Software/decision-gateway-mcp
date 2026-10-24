@@ -1,0 +1,14 @@
+# Forge working artifacts (local only)
+.forge/
+.scratch/
+.remember/
+
+# .NET build output
+bin/
+obj/
+*.user
+.vs/
+
+# OS / IDE
+.DS_Store
+.idea/
