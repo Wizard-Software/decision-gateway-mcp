@@ -1,0 +1,17 @@
+name: reusable
+
+on: push
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    uses: octo-org/example-repo/.github/workflows/reusable.yml@3d3c42e5aac5ba805825da76410c181273ba90b1 # v1.0.0
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mention uses in text
+        run: |
+          echo "uses: actions/checkout@v4"
+          echo "  uses: ./.github/workflows/x.yml"

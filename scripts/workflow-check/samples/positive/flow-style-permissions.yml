@@ -1,0 +1,19 @@
+name: flow
+
+on: push
+
+permissions: { contents: read }
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, actions: read }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v1.2.3
+        with:
+          persist-credentials: false
+  lint:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - run: echo ok

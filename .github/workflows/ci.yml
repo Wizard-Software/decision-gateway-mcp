@@ -37,6 +37,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check workflow hardening rules
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/wfcheck-venv"
+          "${RUNNER_TEMP}/wfcheck-venv/bin/python" -m pip install --disable-pip-version-check --no-input --require-hashes --no-deps --only-binary=:all: -r scripts/workflow-check/requirements.txt
+          "${RUNNER_TEMP}/wfcheck-venv/bin/python" -B -I scripts/workflow-check/test_check_workflows.py -v
+          "${RUNNER_TEMP}/wfcheck-venv/bin/python" -B -I scripts/workflow-check/check_workflows.py .github/workflows
+
       - name: Set up .NET SDK (isolated install, exact version)
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         env:
