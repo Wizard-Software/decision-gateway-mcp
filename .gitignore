@@ -21,3 +21,27 @@ CLAUDE.md
 AGENTS.md
 .claude/
 .agents/
+
+# Tool caches
+.serena/
+
+# Build / test / benchmark artifacts
+*.binlog
+TestResults/
+BenchmarkDotNet.Artifacts/
+artifacts/
+
+# Secrets and local credentials
+.env
+.env.*
+.envrc
+*.pfx
+*.p12
+*.p8
+*.pem
+*.key
+
+# Local MCP client configs (may hold API keys in their env section)
+.mcp.json
+.vscode/mcp.json
+.cursor/mcp.json
