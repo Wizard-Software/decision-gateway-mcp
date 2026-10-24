@@ -1,0 +1,6 @@
+# expect: WF005
+name: s
+on: push
+permissions:
+	contents: read
+jobs: {}

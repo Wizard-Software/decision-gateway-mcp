@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DecisionGateway.Core/DecisionGateway.Core.csproj" />
+    <Project Path="src/DecisionGateway.Host/DecisionGateway.Host.csproj" />
+    <Project Path="src/DecisionGateway.Providers/DecisionGateway.Providers.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DecisionGateway.Core.Tests/DecisionGateway.Core.Tests.csproj" />
+    <Project Path="tests/DecisionGateway.Host.ContractTests/DecisionGateway.Host.ContractTests.csproj" />
+    <Project Path="tests/DecisionGateway.Providers.Tests/DecisionGateway.Providers.Tests.csproj" />
+  </Folder>
+  <Folder Name="/bench/">
+    <Project Path="bench/DecisionGateway.Benchmarks/DecisionGateway.Benchmarks.csproj" />
+  </Folder>
+</Solution>

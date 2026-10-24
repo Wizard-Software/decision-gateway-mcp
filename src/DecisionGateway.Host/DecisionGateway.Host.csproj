@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>decision-gateway-mcp</AssemblyName>
+    <RootNamespace>DecisionGateway.Host</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <!-- Explicit release RIDs: with PublishAot the SDK otherwise adds only the machine RID,
+         so a lock file generated on one OS breaks locked-mode restore on the others. -->
+    <RuntimeIdentifiers>win-x64;linux-x64;linux-arm64;osx-arm64;osx-x64</RuntimeIdentifiers>
+    <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
+    <!-- Skip downloading unused transitive framework packs (e.g. ASP.NET Core) for every RID. -->
+    <DisableTransitiveFrameworkReferenceDownloads>true</DisableTransitiveFrameworkReferenceDownloads>
+  </PropertyGroup>
+
+  <!-- Preliminary dnx tool package metadata; the final shape is confirmed by the AOT spike. -->
+  <PropertyGroup>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>decision-gateway-mcp</ToolCommandName>
+    <ToolPackageRuntimeIdentifiers>$(RuntimeIdentifiers)</ToolPackageRuntimeIdentifiers>
+    <PackageType>McpServer</PackageType>
+    <PackageId>DecisionGateway.Mcp</PackageId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DecisionGateway.Core\DecisionGateway.Core.csproj" />
+    <ProjectReference Include="..\DecisionGateway.Providers\DecisionGateway.Providers.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+</Project>
