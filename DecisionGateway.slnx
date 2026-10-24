@@ -1,5 +1,9 @@
 <Solution>
-  <Folder Name="/src/" />
+  <Folder Name="/src/">
+    <Project Path="src/DecisionGateway.Core/DecisionGateway.Core.csproj" />
+    <Project Path="src/DecisionGateway.Host/DecisionGateway.Host.csproj" />
+    <Project Path="src/DecisionGateway.Providers/DecisionGateway.Providers.csproj" />
+  </Folder>
   <Folder Name="/tests/" />
   <Folder Name="/bench/" />
 </Solution>
