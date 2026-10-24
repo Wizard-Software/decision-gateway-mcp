@@ -12,3 +12,6 @@ obj/
 # OS / IDE
 .DS_Store
 .idea/
+
+# Local concept notes
+desription.md
