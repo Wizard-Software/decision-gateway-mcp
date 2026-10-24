@@ -15,3 +15,9 @@ obj/
 
 # Local concept notes
 desription.md
+
+# AI assistant instructions (local only)
+CLAUDE.md
+AGENTS.md
+.claude/
+.agents/
