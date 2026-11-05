@@ -150,3 +150,147 @@ jobs:
             ${{ runner.temp }}/test-results/**/*.cobertura.xml
           if-no-files-found: error
           retention-days: 14
+
+  publish-aot:
+    name: publish-aot (${{ matrix.rid }})
+    needs: build-test
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-latest
+          - rid: linux-x64
+            runner: ubuntu-latest
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+          - rid: osx-arm64
+            runner: macos-latest
+          - rid: osx-x64
+            runner: macos-15-intel
+    env:
+      RID: ${{ matrix.rid }}
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET SDK (isolated install, exact version)
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+        with:
+          dotnet-version: ${{ env.DOTNET_SDK_VERSION }}
+
+      - name: Assert resolved SDK version
+        run: |
+          actual="$(dotnet --version)"
+          echo "Resolved SDK: ${actual}"
+          if [ "${actual}" != "${DOTNET_SDK_VERSION}" ]; then
+            echo "::error::Resolved SDK ${actual} differs from pinned ${DOTNET_SDK_VERSION}; lock files would fail with NU1004."
+            exit 1
+          fi
+
+      - name: Point NuGet at a job-local package folder
+        run: echo "NUGET_PACKAGES=${RUNNER_TEMP}/nuget-packages" >> "${GITHUB_ENV}"
+
+      - name: Ensure native toolchain (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        timeout-minutes: 10
+        run: |
+          missing=()
+          command -v clang > /dev/null 2>&1 || missing+=("clang")
+          dpkg -s zlib1g-dev > /dev/null 2>&1 || missing+=("zlib1g-dev")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "${missing[@]}"
+          fi
+          clang --version
+
+      - name: Restore (locked mode)
+        run: dotnet restore src/DecisionGateway.Host/DecisionGateway.Host.csproj --locked-mode -tl:off
+
+      - name: Verify NuGet package signatures
+        run: |
+          count="$(find "${NUGET_PACKAGES}" -name '*.nupkg' | wc -l | tr -d ' ')"
+          if [ "${count}" -eq 0 ]; then
+            echo "::error::No packages found in ${NUGET_PACKAGES}."
+            exit 1
+          fi
+          missing=0
+          while IFS= read -r -d '' meta; do
+            dir="$(dirname "${meta}")"
+            if ! compgen -G "${dir}/*.nupkg" > /dev/null; then
+              echo "::error::Package folder without its .nupkg: ${dir#"${NUGET_PACKAGES}/"}"
+              missing=1
+            fi
+          done < <(find "${NUGET_PACKAGES}" -name '.nupkg.metadata' -print0)
+          if [ "${missing}" -ne 0 ]; then
+            exit 1
+          fi
+          failed=0
+          while IFS= read -r -d '' pkg; do
+            if ! dotnet nuget verify --all "${pkg}" > /dev/null; then
+              echo "::error::Signature verification failed: ${pkg#"${NUGET_PACKAGES}/"}"
+              dotnet nuget verify --all "${pkg}" || true
+              failed=1
+            fi
+          done < <(find "${NUGET_PACKAGES}" -name '*.nupkg' -print0 | sort -z)
+          if [ "${failed}" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Verified signatures of ${count} packages."
+
+      - name: Publish Native AOT
+        run: |
+          out="${RUNNER_TEMP}/publish/${RID}"
+          dotnet publish src/DecisionGateway.Host/DecisionGateway.Host.csproj \
+            -c Release -r "${RID}" -o "${out}" -tl:off \
+            --no-restore \
+            -p:TreatWarningsAsErrors=true \
+            -p:TrimmerSingleWarn=false \
+            2>&1 | tee "${RUNNER_TEMP}/publish-${RID}.log"
+
+      - name: Assert no IL2xxx/IL3xxx diagnostics
+        run: |
+          if grep -En '(warning|error) IL[23][0-9]{3}' "${RUNNER_TEMP}/publish-${RID}.log"; then
+            echo "::error::IL2xxx/IL3xxx diagnostics in Native AOT publish for ${RID}."
+            exit 1
+          fi
+
+      - name: Assert lock files unchanged
+        run: |
+          git diff --exit-code -- '*packages.lock.json'
+          if [ -n "$(git status --porcelain -- '*packages.lock.json')" ]; then
+            git status --porcelain -- '*packages.lock.json'
+            echo "::error::Publish restore created or modified packages.lock.json files."
+            exit 1
+          fi
+
+      - name: Stage native file
+        run: |
+          ext=""
+          if [ "${RUNNER_OS}" = "Windows" ]; then ext=".exe"; fi
+          src="${RUNNER_TEMP}/publish/${RID}/decision-gateway-mcp${ext}"
+          if [ ! -s "${src}" ]; then
+            echo "::error::Native file not found or empty: ${src}"
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/artifact"
+          cp "${src}" "${RUNNER_TEMP}/artifact/decision-gateway-mcp-${RID}${ext}"
+
+      - name: Upload native file
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: decision-gateway-mcp-${{ matrix.rid }}
+          path: ${{ runner.temp }}/artifact/
+          if-no-files-found: error
+          retention-days: 14
