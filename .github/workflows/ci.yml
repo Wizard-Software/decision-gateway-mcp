@@ -295,6 +295,41 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Pack tool packages and try dnx
+        timeout-minutes: 15
+        run: |
+          ext=""
+          if [ "${RUNNER_OS}" = "Windows" ]; then ext=".exe"; fi
+          scripts/dnx-local-trial.sh "${RID}" "${RUNNER_TEMP}/publish/${RID}/decision-gateway-mcp${ext}" "${RUNNER_TEMP}/nupkg"
+
+      - name: Assert lock files unchanged after pack
+        run: |
+          git diff --exit-code -- '*packages.lock.json'
+          if [ -n "$(git status --porcelain -- '*packages.lock.json')" ]; then
+            git status --porcelain -- '*packages.lock.json'
+            echo "::error::Pack created or modified packages.lock.json files."
+            exit 1
+          fi
+
+      - name: Upload RID tool package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tool-package-${{ matrix.rid }}
+          path: ${{ runner.temp }}/nupkg/DecisionGateway.Mcp.${{ matrix.rid }}.*.nupkg
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload pointer tool package
+        if: ${{ matrix.rid == 'linux-x64' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tool-package-pointer
+          path: ${{ runner.temp }}/nupkg/DecisionGateway.Mcp.0.*.nupkg
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
   # Stage 0: the startup time is measured and reported only; no threshold fails this job.
   # The job fails only when a measurement cannot be taken. Tests of category Startup do not
   # run in CI (build-test excludes them); this job is the end-to-end proof of the harness.
