@@ -294,3 +294,116 @@ jobs:
           path: ${{ runner.temp }}/artifact/
           if-no-files-found: error
           retention-days: 14
+
+  # Stage 0: the startup time is measured and reported only; no threshold fails this job.
+  # The job fails only when a measurement cannot be taken. Tests of category Startup do not
+  # run in CI (build-test excludes them); this job is the end-to-end proof of the harness.
+  startup-perf:
+    name: startup-perf (${{ matrix.rid }})
+    needs: publish-aot
+    if: ${{ !cancelled() }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-latest
+          - rid: linux-x64
+            runner: ubuntu-latest
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+          - rid: osx-arm64
+            runner: macos-latest
+          - rid: osx-x64
+            runner: macos-15-intel
+    env:
+      RID: ${{ matrix.rid }}
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET SDK (isolated install, exact version)
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+        with:
+          dotnet-version: ${{ env.DOTNET_SDK_VERSION }}
+
+      - name: Assert resolved SDK version
+        run: |
+          actual="$(dotnet --version)"
+          echo "Resolved SDK: ${actual}"
+          if [ "${actual}" != "${DOTNET_SDK_VERSION}" ]; then
+            echo "::error::Resolved SDK ${actual} differs from pinned ${DOTNET_SDK_VERSION}; lock files would fail with NU1004."
+            exit 1
+          fi
+
+      - name: Point NuGet at a job-local package folder
+        run: |
+          echo "NUGET_PACKAGES=${RUNNER_TEMP}/nuget-packages" >> "${GITHUB_ENV}"
+          mkdir -p "${RUNNER_TEMP}/nuget-packages"
+
+      - name: Download native file
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: decision-gateway-mcp-${{ matrix.rid }}
+          path: ${{ runner.temp }}/native
+
+      - name: Restore harness (locked mode)
+        run: dotnet restore bench/DecisionGateway.StartupHarness/DecisionGateway.StartupHarness.csproj --locked-mode -tl:off
+
+      - name: Build harness
+        run: dotnet build bench/DecisionGateway.StartupHarness/DecisionGateway.StartupHarness.csproj -c Release --no-restore -tl:off
+
+      - name: Assert no packages and lock files unchanged
+        run: |
+          if [ -n "$(find "${NUGET_PACKAGES}" -mindepth 1 | head -n 1)" ]; then
+            find "${NUGET_PACKAGES}" -mindepth 1 -maxdepth 2
+            echo "::error::The harness restore fetched packages; they would run without signature verification."
+            exit 1
+          fi
+          git diff --exit-code -- '*packages.lock.json'
+          if [ -n "$(git status --porcelain -- '*packages.lock.json')" ]; then
+            git status --porcelain -- '*packages.lock.json'
+            echo "::error::Harness restore created or modified packages.lock.json files."
+            exit 1
+          fi
+
+      - name: Measure startup (50 runs, stage 0 — report only)
+        run: |
+          ext=""
+          if [ "${RUNNER_OS}" = "Windows" ]; then ext=".exe"; fi
+          bin="${RUNNER_TEMP}/native/decision-gateway-mcp-${RID}${ext}"
+          if [ ! -s "${bin}" ]; then
+            echo "::error::Native file not found or empty: ${bin}"
+            exit 1
+          fi
+          if [ "${RUNNER_OS}" != "Windows" ]; then chmod +x "${bin}"; fi
+          mkdir -p "${RUNNER_TEMP}/startup"
+          dotnet bench/DecisionGateway.StartupHarness/bin/Release/net10.0/DecisionGateway.StartupHarness.dll \
+            --binary "${bin}" --runs 50 --rid "${RID}" \
+            --output "${RUNNER_TEMP}/startup/startup-${RID}.json" \
+            | tee "${RUNNER_TEMP}/startup-${RID}.log"
+          summary="$(grep -E '^summary: ' "${RUNNER_TEMP}/startup-${RID}.log" | tail -n 1)"
+          {
+            echo "### startup-perf ${RID} (stage 0, no threshold)"
+            echo ""
+            echo "\`${summary#summary: }\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload startup report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: startup-${{ matrix.rid }}
+          path: ${{ runner.temp }}/startup/startup-${{ matrix.rid }}.json
+          if-no-files-found: error
+          retention-days: 14
