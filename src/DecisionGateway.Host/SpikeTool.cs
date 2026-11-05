@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Text;
 using System.Text.Json;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
@@ -13,6 +14,9 @@ namespace DecisionGateway.Host;
 internal static class SpikeTool
 {
     public const string Name = "evaluate_decision";
+
+    /// <summary>Fixed spike result, serialized through <see cref="HostJsonContext"/>.</summary>
+    internal static SpikeDecisionResult FixedResult { get; } = new("spike", 1.0, 0, "jev", false);
 
     /// <summary>Builds the tool definition once; the input schema is written at runtime with <see cref="Utf8JsonWriter"/>.</summary>
     public static Tool Build()
@@ -48,7 +52,7 @@ internal static class SpikeTool
         CancellationToken cancellationToken) =>
         ValueTask.FromResult(new ListToolsResult { Tools = [tool] });
 
-    /// <summary>Handler for tools/call: returns a fixed text block; unknown tool names are a protocol error.</summary>
+    /// <summary>Handler for tools/call: returns the fixed result as snake_case JSON in both the text block and structured content; unknown tool names are a protocol error.</summary>
     public static ValueTask<CallToolResult> CallAsync(
         RequestContext<CallToolRequestParams> context,
         CancellationToken cancellationToken)
@@ -58,9 +62,12 @@ internal static class SpikeTool
             throw new McpProtocolException("Unknown tool", McpErrorCode.InvalidParams);
         }
 
+        var json = JsonSerializer.SerializeToUtf8Bytes(FixedResult, HostJsonContext.Default.SpikeDecisionResult);
+
         return ValueTask.FromResult(new CallToolResult
         {
-            Content = [new TextContentBlock { Text = "spike" }],
+            Content = [new TextContentBlock { Text = Encoding.UTF8.GetString(json) }],
+            StructuredContent = JsonElement.Parse(json),
         });
     }
 }

@@ -25,10 +25,13 @@ internal static class HostProcess
         "PATHEXT",
     ];
 
-    /// <summary>Creates the stdio transport: a native binary when DG_BINARY_PATH is set, otherwise "dotnet" plus the host dll.</summary>
-    public static StdioClientTransport CreateTransport()
+    /// <summary>
+    /// Resolves how to start the host: a native binary when DG_BINARY_PATH is set, otherwise "dotnet" plus the host dll,
+    /// together with the allowlisted environment. Shared by the SDK transport and the raw-process tests.
+    /// </summary>
+    internal static (string Command, string[] Arguments, IReadOnlyDictionary<string, string> Environment) ResolveStartInfo()
     {
-        var environment = new Dictionary<string, string?>();
+        var environment = new Dictionary<string, string>();
         foreach (var name in AllowedEnvironmentVariables)
         {
             var value = Environment.GetEnvironmentVariable(name);
@@ -37,9 +40,6 @@ internal static class HostProcess
                 environment[name] = value;
             }
         }
-
-        string command;
-        string[]? arguments = null;
 
         var binaryPath = Environment.GetEnvironmentVariable(BinaryPathVariable);
         if (binaryPath is not null)
@@ -51,29 +51,32 @@ internal static class HostProcess
                     $"{BinaryPathVariable} is set but is not a fully qualified path to an existing file.");
             }
 
-            command = binaryPath;
+            return (binaryPath, [], environment);
         }
-        else
-        {
-            var hostDll = Path.Combine(AppContext.BaseDirectory, HostDllName);
-            if (!File.Exists(hostDll))
-            {
-                throw new FileNotFoundException(
-                    $"Host assembly '{HostDllName}' was not found in the test output directory.", hostDll);
-            }
 
-            var dotnet = Environment.GetEnvironmentVariable(HostPathVariable);
-            command = string.IsNullOrWhiteSpace(dotnet) ? "dotnet" : dotnet;
-            arguments = [hostDll];
+        var hostDll = Path.Combine(AppContext.BaseDirectory, HostDllName);
+        if (!File.Exists(hostDll))
+        {
+            throw new FileNotFoundException(
+                $"Host assembly '{HostDllName}' was not found in the test output directory.", hostDll);
         }
+
+        var dotnet = Environment.GetEnvironmentVariable(HostPathVariable);
+        return (string.IsNullOrWhiteSpace(dotnet) ? "dotnet" : dotnet, [hostDll], environment);
+    }
+
+    /// <summary>Creates the stdio transport for the host resolved by <see cref="ResolveStartInfo"/>.</summary>
+    public static StdioClientTransport CreateTransport()
+    {
+        var (command, arguments, environment) = ResolveStartInfo();
 
         var options = new StdioClientTransportOptions
         {
             Name = "decision-gateway-mcp",
             Command = command,
-            Arguments = arguments,
+            Arguments = arguments.Length == 0 ? null : arguments,
             InheritEnvironmentVariables = false,
-            EnvironmentVariables = environment,
+            EnvironmentVariables = environment.ToDictionary(kv => kv.Key, kv => (string?)kv.Value),
             ShutdownTimeout = TimeSpan.FromSeconds(5),
         };
 
