@@ -7,11 +7,11 @@ using System.Text.Json;
 namespace DecisionGateway.Host.Transport;
 
 /// <summary>
-/// Before the SDK sees a <c>tools/call</c> frame, the transport decodes the
-/// large base64 <c>params.arguments.image_payload</c> string straight from the frame bytes into <see cref="ImagePayloadStore"/>
+/// Before the SDK sees a <c>tools/call</c> frame, the transport copies the original base64 text of the large
+/// <c>params.arguments.image_payload</c> string (UTF-8 bytes, not decoded) from the frame into <see cref="ImagePayloadStore"/>
 /// and rewrites the frame with a short handle in its place. The SDK then parses and binds a frame of a few hundred bytes,
 /// so none of its copies of the argument (UTF-16 line, <c>JsonNode</c>, the worst-case escaping buffer it rents when it
-/// re-serializes <c>params</c>) scale with the image.
+/// re-serializes <c>params</c>) scale with the image. The image itself is never decoded here.
 /// </summary>
 internal static class ImagePayloadExtractor
 {
@@ -23,22 +23,22 @@ internal static class ImagePayloadExtractor
     private static ReadOnlySpan<byte> ArgumentName => "image_payload"u8;
 
     /// <summary>
-    /// Returns a rewritten frame and the decoded payload when the frame is a <c>tools/call</c> request whose
-    /// <c>image_payload</c> argument is an unescaped base64 string of at least <see cref="MinExtractBytes"/>; otherwise false
-    /// (the frame is then processed unchanged, so malformed input keeps the normal error path).
+    /// Returns a rewritten frame and the copied base64 text when the frame is a <c>tools/call</c> request whose
+    /// <c>image_payload</c> argument is an unescaped string of at least <see cref="MinExtractBytes"/> that is valid base64
+    /// without whitespace; otherwise false. The frame is then processed unchanged, so invalid input keeps the normal path
+    /// (and the handler's validation).
     /// </summary>
-    public static bool TryExtract(ReadOnlySequence<byte> frame, JsonReaderOptions options, out byte[] rewritten, out string handle, out byte[] payload)
+    public static bool TryExtract(ReadOnlySequence<byte> frame, JsonReaderOptions options, out byte[] rewritten, out string handle, out ExtractedImagePayload payload)
     {
         rewritten = [];
         handle = string.Empty;
-        payload = [];
+        payload = default!;
         if (frame.Length < MinExtractBytes)
         {
             return false;
         }
 
         long start = -1, end = -1;
-        ReadOnlySequence<byte> value = default;
         var isToolsCall = false;
         try
         {
@@ -88,7 +88,6 @@ internal static class ImagePayloadExtractor
                             {
                                 start = reader.TokenStartIndex;
                                 end = reader.BytesConsumed;
-                                value = reader.HasValueSequence ? reader.ValueSequence : new ReadOnlySequence<byte>(reader.ValueSpan.ToArray());
                             }
                             else
                             {
@@ -109,7 +108,14 @@ internal static class ImagePayloadExtractor
             return false;
         }
 
-        if (!isToolsCall || start < 0 || value.Length < MinExtractBytes || !TryDecode(value, out payload))
+        if (!isToolsCall || start < 0)
+        {
+            return false;
+        }
+
+        // An unescaped JSON string token is the quote, the raw bytes and the quote.
+        var value = frame.Slice(start + 1, end - start - 2);
+        if (value.Length < MinExtractBytes || !TryCopyBase64(value, out payload))
         {
             return false;
         }
@@ -125,82 +131,38 @@ internal static class ImagePayloadExtractor
         return true;
     }
 
-    /// <summary>Streaming base64 decode across sequence segments, without joining them first.</summary>
-    private static bool TryDecode(ReadOnlySequence<byte> base64, out byte[] payload)
+    /// <summary>
+    /// Copies the base64 text across sequence segments into one array of the exact size and validates the copy without
+    /// allocating: no whitespace (which <see cref="Base64.IsValid(ReadOnlySpan{byte}, out int)"/> would skip) and valid
+    /// base64 with correct padding. A <c>data:</c> URL prefix fails the base64 check.
+    /// </summary>
+    private static bool TryCopyBase64(ReadOnlySequence<byte> base64, out ExtractedImagePayload payload)
     {
-        payload = [];
-        var length = base64.Length;
-        if (length % 4 != 0)
+        payload = default!;
+        var copy = base64.ToArray();
+        if (copy.AsSpan().IndexOfAny(" \t\r\n"u8) >= 0 || !Base64.IsValid(copy, out var decodedLength))
         {
             return false;
         }
 
-        var buffer = new byte[length / 4 * 3];
-        var written = 0;
-        Span<byte> carry = stackalloc byte[4];
-        var carryLength = 0;
-        var position = 0L;
-        foreach (var memory in base64)
-        {
-            var span = memory.Span;
-            position += span.Length;
-            var isLast = position == length;
-
-            if (carryLength > 0)
-            {
-                var take = Math.Min(4 - carryLength, span.Length);
-                span[..take].CopyTo(carry[carryLength..]);
-                carryLength += take;
-                span = span[take..];
-                if (carryLength < 4)
-                {
-                    continue;
-                }
-
-                if (Base64.DecodeFromUtf8(carry, buffer.AsSpan(written), out _, out var carryWritten, isFinalBlock: isLast && span.IsEmpty) != OperationStatus.Done)
-                {
-                    return false;
-                }
-
-                written += carryWritten;
-                carryLength = 0;
-            }
-
-            var whole = span.Length - (span.Length % 4);
-            if (whole > 0)
-            {
-                if (Base64.DecodeFromUtf8(span[..whole], buffer.AsSpan(written), out _, out var chunkWritten, isFinalBlock: isLast && whole == span.Length) != OperationStatus.Done)
-                {
-                    return false;
-                }
-
-                written += chunkWritten;
-            }
-
-            span[whole..].CopyTo(carry);
-            carryLength = span.Length - whole;
-        }
-
-        if (carryLength != 0)
-        {
-            return false;
-        }
-
-        payload = written == buffer.Length ? buffer : buffer.AsSpan(0, written).ToArray();
+        payload = new ExtractedImagePayload(copy, decodedLength);
         return true;
     }
 }
 
+/// <summary>Original base64 text (UTF-8) of an extracted image and the length of the image it encodes.</summary>
+internal sealed record ExtractedImagePayload(ReadOnlyMemory<byte> Base64Utf8, int DecodedLength);
+
 /// <summary>Side store for payloads extracted by the transport; the handler takes (and thereby removes) them by handle.</summary>
 internal static class ImagePayloadStore
 {
-    private static readonly ConcurrentDictionary<string, byte[]> Payloads = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, ExtractedImagePayload> Payloads = new(StringComparer.Ordinal);
 
     public static int Count => Payloads.Count;
 
-    public static void Put(string handle, byte[] payload) => Payloads[handle] = payload;
+    public static void Put(string handle, ExtractedImagePayload payload) => Payloads[handle] = payload;
 
-    public static bool TryTake(string handle, out byte[]? payload) => Payloads.TryRemove(handle, out payload);
+    public static bool TryTake(string handle, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ExtractedImagePayload? payload) => Payloads.TryRemove(handle, out payload);
 
     public static void Discard(string handle) => Payloads.TryRemove(handle, out _);
 }

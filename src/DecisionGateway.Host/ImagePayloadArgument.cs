@@ -13,11 +13,11 @@ internal static class ImagePayloadArgument
     private const int MaxHandleBytes = 128;
 
     /// <summary>
-    /// Takes (and removes from <see cref="ImagePayloadStore"/>) the decoded image the transport extracted for this call.
+    /// Takes (and removes from <see cref="ImagePayloadStore"/>) the original base64 text the transport extracted for this call.
     /// Returns null when the argument is missing, is not a handle, or the store no longer holds it. An inline base64 value
     /// (SDK transport, or extraction turned off) is recognised by its raw length and never materialized as a string.
     /// </summary>
-    public static byte[]? TakeExtracted(IDictionary<string, JsonElement>? arguments)
+    public static ExtractedImagePayload? TakeExtracted(IDictionary<string, JsonElement>? arguments)
     {
         if (arguments is null
             || !arguments.TryGetValue(Name, out var value)

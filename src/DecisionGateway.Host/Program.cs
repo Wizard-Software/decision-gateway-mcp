@@ -28,7 +28,7 @@ builder.Services
     .WithListToolsHandler((context, ct) => SpikeTool.ListAsync(context, tool, ct))
     .WithCallToolHandler((context, ct) =>
     {
-        // The tool does not use the image yet; taking it releases the decoded bytes the transport stored for this call.
+        // The tool does not use the image yet; taking it releases the base64 text the transport stored for this call.
         _ = ImagePayloadArgument.TakeExtracted(context.Params?.Arguments);
         return SpikeTool.CallAsync(context, ct);
     });
