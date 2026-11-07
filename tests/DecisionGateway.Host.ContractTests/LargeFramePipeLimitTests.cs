@@ -7,7 +7,7 @@ using AwesomeAssertions;
 namespace DecisionGateway.Host.ContractTests;
 
 /// <summary>
-/// Spike measurement: the pipe stdio transport (forced on for this test, whatever the outer environment) with a 1 MiB frame
+/// Spike measurement: the pipe stdio transport (the default; forced for this test whatever the outer environment) with a 1 MiB frame
 /// limit receives the 20 MiB-payload <c>tools/call</c> frame. The frame must be rejected with a JSON-RPC error carrying
 /// its id, the session must keep working, and the working-set growth is printed as a finding.
 /// </summary>
@@ -28,29 +28,11 @@ public sealed class LargeFramePipeLimitTests
         var payload = LargeFrameStdioTests.BuildPayload(LargeFrameStdioTests.PayloadBytes);
         var frame = LargeFrameStdioTests.BuildCallFrame(2, "DG-PIPE-LIMIT-MARKER-5e2b", payload);
 
-        var (command, arguments, environment) = HostProcess.ResolveStartInfo();
-        var startInfo = new ProcessStartInfo(command)
+        using var child = HostProcess.StartRaw(new Dictionary<string, string?>
         {
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        startInfo.Environment.Clear();
-        foreach (var (name, value) in environment)
-        {
-            startInfo.Environment[name] = value;
-        }
-
-        startInfo.Environment["DG_STDIO_TRANSPORT"] = "pipe";
-        startInfo.Environment["DG_MAX_FRAME_BYTES"] = LimitBytes.ToString(CultureInfo.InvariantCulture);
-
-        using var child = Process.Start(startInfo)!;
+            ["DG_STDIO_TRANSPORT"] = null,
+            ["DG_MAX_FRAME_BYTES"] = LimitBytes.ToString(CultureInfo.InvariantCulture),
+        });
         using var kill = ct.Register(() => KillQuietly(child));
         var stderrTask = child.StandardError.ReadToEndAsync(ct);
         var stdin = child.StandardInput.BaseStream;

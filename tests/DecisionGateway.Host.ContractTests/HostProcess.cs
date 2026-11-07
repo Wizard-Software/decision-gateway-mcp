@@ -27,7 +27,7 @@ internal static class HostProcess
         "TMPDIR",
         "SYSTEMROOT",
         "PATHEXT",
-        // Spike switches of the prototype stdio transport (no secrets): select it and set its limits.
+        // Stdio transport switches (no secrets): fallback to the SDK transport, frame and in-flight limits, image extraction.
         "DG_STDIO_TRANSPORT",
         "DG_MAX_FRAME_BYTES",
         "DG_MAX_INFLIGHT_TOOL_CALLS",
@@ -81,6 +81,47 @@ internal static class HostProcess
 
         var dotnet = Environment.GetEnvironmentVariable(HostPathVariable);
         return (string.IsNullOrWhiteSpace(dotnet) ? "dotnet" : dotnet, [hostDll], environment);
+    }
+
+    /// <summary>
+    /// Starts the host with redirected stdin/stdout/stderr and the allowlisted environment, then applies
+    /// <paramref name="overrides"/> (a null value removes the variable). The caller owns and must kill the process.
+    /// </summary>
+    internal static System.Diagnostics.Process StartRaw(IReadOnlyDictionary<string, string?> overrides)
+    {
+        var (command, arguments, environment) = ResolveStartInfo();
+        var startInfo = new System.Diagnostics.ProcessStartInfo(command)
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        startInfo.Environment.Clear();
+        foreach (var (name, value) in environment)
+        {
+            startInfo.Environment[name] = value;
+        }
+
+        foreach (var (name, value) in overrides)
+        {
+            if (value is null)
+            {
+                startInfo.Environment.Remove(name);
+            }
+            else
+            {
+                startInfo.Environment[name] = value;
+            }
+        }
+
+        return System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("The host process did not start.");
     }
 
     /// <summary>Creates the stdio transport for the host resolved by <see cref="ResolveStartInfo"/>.</summary>

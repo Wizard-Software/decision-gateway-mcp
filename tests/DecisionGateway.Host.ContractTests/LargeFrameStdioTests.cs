@@ -82,7 +82,7 @@ public sealed class LargeFrameStdioTests
         }
 
         var runtime = Environment.GetEnvironmentVariable(BinaryPathVariable) is null ? "jit" : "native";
-        var transport = Environment.GetEnvironmentVariable("DG_STDIO_TRANSPORT") ?? "sdk";
+        var transport = Environment.GetEnvironmentVariable("DG_STDIO_TRANSPORT") ?? "pipe";
 #if DEBUG
         const string config = "Debug";
 #else

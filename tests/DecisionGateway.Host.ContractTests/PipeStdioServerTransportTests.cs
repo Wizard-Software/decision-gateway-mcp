@@ -7,7 +7,7 @@ using ModelContextProtocol.Protocol;
 
 namespace DecisionGateway.Host.ContractTests;
 
-/// <summary>Spike prototype: framing, size limit, parse errors and in-flight limit of the pipe stdio transport, over in-memory pipes.</summary>
+/// <summary>Framing, size limit, parse errors, in-flight limit and image extraction of the pipe stdio transport, over in-memory pipes.</summary>
 public sealed class PipeStdioServerTransportTests
 {
     private const string ToolCall = """{"jsonrpc":"2.0","id":ID,"method":"tools/call","params":{"name":"evaluate_decision","arguments":{"question":"q"}}}""";
@@ -106,18 +106,22 @@ public sealed class PipeStdioServerTransportTests
     }
 
     [Fact, Trait("Category", "Unit")]
-    public async Task ExtractImagePayload_ReplacesArgumentWithHandle_AndStoresDecodedBytes()
+    public async Task ExtractImagePayload_Base64WithPlusAndSlash_ReplacedWithHandle_AndStoresDecodedBytes()
     {
-        await using var harness = new Harness(new PipeStdioTransportOptions { ExtractImagePayload = true });
+        await using var harness = new Harness(new PipeStdioTransportOptions());
         var data = new byte[300_001];
         for (var i = 0; i < data.Length; i++)
         {
             data[i] = unchecked((byte)((i * 31) + 7));
         }
 
+        // '+' is the character the SDK escapes when it re-serializes params (the 256 MiB buffer for a 20 MiB image).
+        var base64 = Convert.ToBase64String(data);
+        base64.Should().Contain("+").And.Contain("/");
+
         var frame = Encoding.UTF8.GetBytes(
             """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"evaluate_decision","arguments":{"question":"q","image_payload":"""
-            + "\"" + Convert.ToBase64String(data) + "\"}}}\n");
+            + "\"" + base64 + "\"}}}\n");
 
         // Odd-sized chunks put segment boundaries inside base64 quads.
         foreach (var chunk in frame.Chunk(4093))
@@ -138,7 +142,7 @@ public sealed class PipeStdioServerTransportTests
     [Fact, Trait("Category", "Unit")]
     public async Task ExtractImagePayload_UntakenPayload_IsDiscardedWhenTheResponseIsSent()
     {
-        await using var harness = new Harness(new PipeStdioTransportOptions { ExtractImagePayload = true });
+        await using var harness = new Harness(new PipeStdioTransportOptions());
         var payload = Convert.ToBase64String(new byte[100_000]);
         await harness.WriteLineAsync(
             """{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"evaluate_decision","arguments":{"image_payload":"""
@@ -149,6 +153,36 @@ public sealed class PipeStdioServerTransportTests
 
         await harness.Transport.SendMessageAsync(new JsonRpcResponse { Id = request.Id, Result = null }, TestContext.Current.CancellationToken);
         ImagePayloadStore.TryTake(handle, out _).Should().BeFalse();
+    }
+
+    [Fact, Trait("Category", "Unit")]
+    public async Task ExtractImagePayload_CancelledRequest_DropsPayloadFromStore()
+    {
+        await using var harness = new Harness(new PipeStdioTransportOptions());
+        await harness.WriteLineAsync(
+            """{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"evaluate_decision","arguments":{"image_payload":"""
+            + "\"" + Convert.ToBase64String(new byte[100_000]) + "\"}}}");
+        var request = (JsonRpcRequest)await harness.ReadInboundAsync();
+        var handle = request.Params!["arguments"]!["image_payload"]!.GetValue<string>();
+        handle.Should().StartWith(ImagePayloadExtractor.HandlePrefix);
+
+        await harness.WriteLineAsync("""{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":8,"reason":"test"}}""");
+
+        // The notification is forwarded after the store is cleaned, so reading it orders the check without timing.
+        (await harness.ReadInboundAsync()).Should().BeOfType<JsonRpcNotification>();
+        ImagePayloadStore.TryTake(handle, out _).Should().BeFalse();
+    }
+
+    [Fact, Trait("Category", "Unit")]
+    public async Task ExtractImagePayload_TurnedOff_LeavesArgumentInline()
+    {
+        await using var harness = new Harness(new PipeStdioTransportOptions { ExtractImagePayload = false });
+        var base64 = Convert.ToBase64String(new byte[100_000]);
+        await harness.WriteLineAsync(
+            """{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"evaluate_decision","arguments":{"image_payload":"""
+            + "\"" + base64 + "\"}}}");
+        var request = (JsonRpcRequest)await harness.ReadInboundAsync();
+        request.Params!["arguments"]!["image_payload"]!.GetValue<string>().Should().Be(base64);
     }
 
     /// <summary>The transport over two in-memory pipes: the test writes "stdin" and reads "stdout" line by line.</summary>
