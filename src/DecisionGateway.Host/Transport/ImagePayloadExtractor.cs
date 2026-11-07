@@ -7,9 +7,11 @@ using System.Text.Json;
 namespace DecisionGateway.Host.Transport;
 
 /// <summary>
-/// Spike variant 3(b) (DG_PIPE_EXTRACT_IMAGE=1): before the SDK sees a <c>tools/call</c> frame, the transport decodes the
+/// Before the SDK sees a <c>tools/call</c> frame, the transport decodes the
 /// large base64 <c>params.arguments.image_payload</c> string straight from the frame bytes into <see cref="ImagePayloadStore"/>
-/// and rewrites the frame with a short handle in its place. The SDK then parses and binds a frame of a few hundred bytes.
+/// and rewrites the frame with a short handle in its place. The SDK then parses and binds a frame of a few hundred bytes,
+/// so none of its copies of the argument (UTF-16 line, <c>JsonNode</c>, the worst-case escaping buffer it rents when it
+/// re-serializes <c>params</c>) scale with the image.
 /// </summary>
 internal static class ImagePayloadExtractor
 {

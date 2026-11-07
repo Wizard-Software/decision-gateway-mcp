@@ -12,16 +12,20 @@ using ModelContextProtocol.Protocol;
 namespace DecisionGateway.Host.Transport;
 
 /// <summary>
-/// Spike prototype of a stdio server transport built on the public <see cref="TransportBase"/> of the MCP SDK.
+/// Stdio server transport built on the public <see cref="TransportBase"/> of the MCP SDK.
 /// Reads newline-delimited JSON-RPC frames from a <see cref="PipeReader"/> (pooled buffers), finds line ends with a
 /// <see cref="SequenceReader{T}"/>, rejects a frame above <see cref="PipeStdioTransportOptions.MaxFrameBytes"/> before it is
 /// materialized, and deserializes <see cref="JsonRpcMessage"/> straight from the UTF-8 <see cref="ReadOnlySequence{T}"/>
 /// with the SDK converter, without an intermediate UTF-16 string. Optionally caps the number of <c>tools/call</c>
-/// requests in flight.
+/// requests in flight and, when <see cref="PipeStdioTransportOptions.ExtractImagePayload"/> is on, moves a large base64
+/// <c>image_payload</c> argument out of the frame through <see cref="ImagePayloadExtractor"/>.
 /// </summary>
 internal sealed partial class PipeStdioServerTransport : TransportBase
 {
-    /// <summary>JSON-RPC server-defined error code for a request rejected by the in-flight limit (provisional).</summary>
+    /// <summary>
+    /// JSON-RPC server-defined error code for a request rejected by the in-flight limit. Provisional: the final error code
+    /// for an overloaded server is still to be decided.
+    /// </summary>
     internal const int BusyErrorCode = -32000;
 
     internal const string FrameTooLargeMessage = "Frame exceeds the maximum allowed size.";

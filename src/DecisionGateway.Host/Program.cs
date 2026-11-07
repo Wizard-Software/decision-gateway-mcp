@@ -28,28 +28,14 @@ builder.Services
     .WithListToolsHandler((context, ct) => SpikeTool.ListAsync(context, tool, ct))
     .WithCallToolHandler((context, ct) =>
     {
-        // Spike diagnostics (DG_DIAG_GC=1 only): probe the live heap shortly after this call.
-        GcDiagnostics.ScheduleProbe();
-
-        // Spike variant 3(b): when the transport extracted image_payload, take the decoded bytes from the store
-        // (a real handler would use them; the spike only takes them so the store does not keep them).
-        if (context.Params?.Arguments is { } arguments
-            && arguments.TryGetValue("image_payload", out var image)
-            && image.ValueKind == System.Text.Json.JsonValueKind.String
-            // Raw bytes, no allocation: a 28 MB base64 value (variant off) must not be materialized as a string here.
-            && System.Runtime.InteropServices.JsonMarshal.GetRawUtf8Value(image).Length <= 128
-            && image.GetString() is { } handle
-            && handle.StartsWith(ImagePayloadExtractor.HandlePrefix, StringComparison.Ordinal))
-        {
-            ImagePayloadStore.TryTake(handle, out _);
-        }
-
+        // The tool does not use the image yet; taking it releases the decoded bytes the transport stored for this call.
+        _ = ImagePayloadArgument.TakeExtracted(context.Params?.Arguments);
         return SpikeTool.CallAsync(context, ct);
     });
 
-// Spike switch (DG_STDIO_TRANSPORT=pipe): replace the SDK stdio transport with the PipeReader-based prototype.
-// The SDK registers its transport with a factory, so replacing the descriptor means the SDK transport is never built.
-if (PipeStdioTransportOptions.IsSelected())
+// The pipe transport is the default; DG_STDIO_TRANSPORT=sdk falls back to the SDK stdio transport. The SDK registers its
+// transport with a factory, so replacing the descriptor means the SDK transport is never built.
+if (!PipeStdioTransportOptions.UsesSdkTransport())
 {
     var transportOptions = PipeStdioTransportOptions.FromEnvironment();
     builder.Services.Replace(ServiceDescriptor.Singleton<ITransport>(sp =>
