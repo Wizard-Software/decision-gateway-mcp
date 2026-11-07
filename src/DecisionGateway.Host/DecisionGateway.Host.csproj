@@ -20,7 +20,14 @@
     <ToolPackageRuntimeIdentifiers>$(RuntimeIdentifiers)</ToolPackageRuntimeIdentifiers>
     <PackageType>McpServer</PackageType>
     <PackageId>DecisionGateway.Mcp</PackageId>
+    <Version>0.0.1-spike</Version>
+    <Description>MCP server (stdio) that gates decisions; Native AOT tool package per RID, run with dnx.</Description>
+    <Authors>Artur Sawicki</Authors>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include=".mcp/server.json" Pack="true" PackagePath="/.mcp/" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\DecisionGateway.Core\DecisionGateway.Core.csproj" />

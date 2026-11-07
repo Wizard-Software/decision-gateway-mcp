@@ -11,5 +11,7 @@
   </Folder>
   <Folder Name="/bench/">
     <Project Path="bench/DecisionGateway.Benchmarks/DecisionGateway.Benchmarks.csproj" />
+    <Project Path="bench/DecisionGateway.StartupHarness/DecisionGateway.StartupHarness.csproj" />
+    <Project Path="bench/DecisionGateway.StartupHarness.Tests/DecisionGateway.StartupHarness.Tests.csproj" />
   </Folder>
 </Solution>
