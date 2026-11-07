@@ -106,7 +106,7 @@ public sealed class PipeStdioServerTransportTests
     }
 
     [Fact, Trait("Category", "Unit")]
-    public async Task ExtractImagePayload_Base64WithPlusAndSlash_ReplacedWithHandle_AndStoresDecodedBytes()
+    public async Task ExtractImagePayload_Base64WithPlusAndSlash_ReplacedWithHandle_AndStoresOriginalBase64()
     {
         await using var harness = new Harness(new PipeStdioTransportOptions());
         var data = new byte[300_001];
@@ -123,7 +123,7 @@ public sealed class PipeStdioServerTransportTests
             """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"evaluate_decision","arguments":{"question":"q","image_payload":"""
             + "\"" + base64 + "\"}}}\n");
 
-        // Odd-sized chunks put segment boundaries inside base64 quads.
+        // Odd-sized chunks put segment boundaries inside the base64 text, so the copy spans many segments.
         foreach (var chunk in frame.Chunk(4093))
         {
             await harness.WriteAsync(chunk);
@@ -136,7 +136,8 @@ public sealed class PipeStdioServerTransportTests
         handle.Should().StartWith(ImagePayloadExtractor.HandlePrefix);
 
         ImagePayloadStore.TryTake(handle, out var stored).Should().BeTrue();
-        stored.Should().Equal(data);
+        stored!.Base64Utf8.ToArray().Should().Equal(Encoding.ASCII.GetBytes(base64), "the store keeps the original base64 text, not decoded bytes");
+        stored.DecodedLength.Should().Be(data.Length);
     }
 
     [Fact, Trait("Category", "Unit")]
@@ -183,6 +184,20 @@ public sealed class PipeStdioServerTransportTests
             + "\"" + base64 + "\"}}}");
         var request = (JsonRpcRequest)await harness.ReadInboundAsync();
         request.Params!["arguments"]!["image_payload"]!.GetValue<string>().Should().Be(base64);
+    }
+
+    [Theory, Trait("Category", "Unit")]
+    [InlineData("data:image/png;base64,")]
+    [InlineData("AAAA ")]
+    public async Task ExtractImagePayload_InvalidBase64_StaysInlineForNormalValidation(string prefix)
+    {
+        await using var harness = new Harness(new PipeStdioTransportOptions());
+        var value = prefix + Convert.ToBase64String(new byte[100_000]);
+        await harness.WriteLineAsync(
+            """{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"evaluate_decision","arguments":{"image_payload":"""
+            + "\"" + value + "\"}}}");
+        var request = (JsonRpcRequest)await harness.ReadInboundAsync();
+        request.Params!["arguments"]!["image_payload"]!.GetValue<string>().Should().Be(value);
     }
 
     /// <summary>The transport over two in-memory pipes: the test writes "stdin" and reads "stdout" line by line.</summary>
