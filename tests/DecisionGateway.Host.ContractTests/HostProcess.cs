@@ -12,6 +12,10 @@ internal static class HostProcess
     // The child process starts from an EMPTY environment on purpose: secrets and DecisionGateway__*
     // variables of the test runner must not leak into the host under test. Later tests that need a
     // specific key inject it explicitly. Only the variables the runtime needs to start are copied.
+    // Spike: runtime knobs meant for the host only (e.g. GC heap limits) are passed as DG_CHILD_<NAME>=value and reach the
+    // child as <NAME>=value, so they never apply to the test process itself.
+    private const string ChildOnlyPrefix = "DG_CHILD_";
+
     private static readonly string[] AllowedEnvironmentVariables =
     [
         "PATH",
@@ -23,6 +27,10 @@ internal static class HostProcess
         "TMPDIR",
         "SYSTEMROOT",
         "PATHEXT",
+        // Spike switches of the prototype stdio transport (no secrets): select it and set its limits.
+        "DG_STDIO_TRANSPORT",
+        "DG_MAX_FRAME_BYTES",
+        "DG_MAX_INFLIGHT_TOOL_CALLS",
     ];
 
     /// <summary>
@@ -38,6 +46,15 @@ internal static class HostProcess
             if (!string.IsNullOrEmpty(value))
             {
                 environment[name] = value;
+            }
+        }
+
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            if (entry.Key is string name && name.StartsWith(ChildOnlyPrefix, StringComparison.Ordinal)
+                && name.Length > ChildOnlyPrefix.Length && entry.Value is string childValue)
+            {
+                environment[name[ChildOnlyPrefix.Length..]] = childValue;
             }
         }
 
