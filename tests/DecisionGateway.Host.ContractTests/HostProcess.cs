@@ -12,6 +12,10 @@ internal static class HostProcess
     // The child process starts from an EMPTY environment on purpose: secrets and DecisionGateway__*
     // variables of the test runner must not leak into the host under test. Later tests that need a
     // specific key inject it explicitly. Only the variables the runtime needs to start are copied.
+    // Spike: runtime knobs meant for the host only (e.g. GC heap limits) are passed as DG_CHILD_<NAME>=value and reach the
+    // child as <NAME>=value, so they never apply to the test process itself.
+    private const string ChildOnlyPrefix = "DG_CHILD_";
+
     private static readonly string[] AllowedEnvironmentVariables =
     [
         "PATH",
@@ -23,6 +27,11 @@ internal static class HostProcess
         "TMPDIR",
         "SYSTEMROOT",
         "PATHEXT",
+        // Stdio transport switches (no secrets): fallback to the SDK transport, frame and in-flight limits, image extraction.
+        "DG_STDIO_TRANSPORT",
+        "DG_MAX_FRAME_BYTES",
+        "DG_MAX_INFLIGHT_TOOL_CALLS",
+        "DG_PIPE_EXTRACT_IMAGE",
     ];
 
     /// <summary>
@@ -38,6 +47,15 @@ internal static class HostProcess
             if (!string.IsNullOrEmpty(value))
             {
                 environment[name] = value;
+            }
+        }
+
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            if (entry.Key is string name && name.StartsWith(ChildOnlyPrefix, StringComparison.Ordinal)
+                && name.Length > ChildOnlyPrefix.Length && entry.Value is string childValue)
+            {
+                environment[name[ChildOnlyPrefix.Length..]] = childValue;
             }
         }
 
@@ -63,6 +81,47 @@ internal static class HostProcess
 
         var dotnet = Environment.GetEnvironmentVariable(HostPathVariable);
         return (string.IsNullOrWhiteSpace(dotnet) ? "dotnet" : dotnet, [hostDll], environment);
+    }
+
+    /// <summary>
+    /// Starts the host with redirected stdin/stdout/stderr and the allowlisted environment, then applies
+    /// <paramref name="overrides"/> (a null value removes the variable). The caller owns and must kill the process.
+    /// </summary>
+    internal static System.Diagnostics.Process StartRaw(IReadOnlyDictionary<string, string?> overrides)
+    {
+        var (command, arguments, environment) = ResolveStartInfo();
+        var startInfo = new System.Diagnostics.ProcessStartInfo(command)
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        startInfo.Environment.Clear();
+        foreach (var (name, value) in environment)
+        {
+            startInfo.Environment[name] = value;
+        }
+
+        foreach (var (name, value) in overrides)
+        {
+            if (value is null)
+            {
+                startInfo.Environment.Remove(name);
+            }
+            else
+            {
+                startInfo.Environment[name] = value;
+            }
+        }
+
+        return System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("The host process did not start.");
     }
 
     /// <summary>Creates the stdio transport for the host resolved by <see cref="ResolveStartInfo"/>.</summary>

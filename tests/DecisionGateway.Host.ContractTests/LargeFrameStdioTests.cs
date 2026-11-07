@@ -29,7 +29,10 @@ public sealed class LargeFrameStdioTests
 {
     internal const int PayloadBytes = 20 * 1024 * 1024;
     internal const int Runs = 5;
-    internal const int SeqCalls = 5;
+    internal static readonly int SeqCalls = ReadSeqCalls();
+
+    /// <summary>Optional override of the serial-call count (spike measurements of growth over more calls).</summary>
+    private const string SeqCallsVariable = "DG_LARGE_FRAME_SEQ_CALLS";
 
     private const string Marker = "DG-LARGE-FRAME-MARKER-91d4";
     private const string BinaryPathVariable = "DG_BINARY_PATH";
@@ -79,13 +82,14 @@ public sealed class LargeFrameStdioTests
         }
 
         var runtime = Environment.GetEnvironmentVariable(BinaryPathVariable) is null ? "jit" : "native";
+        var transport = Environment.GetEnvironmentVariable("DG_STDIO_TRANSPORT") ?? "pipe";
 #if DEBUG
         const string config = "Debug";
 #else
         const string config = "Release";
 #endif
         output.WriteLine(
-            $"LARGE-FRAME runtime={runtime} config={config} os={RuntimeInformation.OSDescription} arch={RuntimeInformation.OSArchitecture} "
+            $"LARGE-FRAME runtime={runtime} transport={transport} config={config} os={RuntimeInformation.OSDescription} arch={RuntimeInformation.OSArchitecture} "
             + $"runs={Runs} payload_chars={payload.Length} frame_bytes={frame.Length} "
             + $"elapsed_ms_min/median/max={MinMedMax(runs.Select(r => (double)r.ElapsedMs), "F0")} "
             + $"delta_ws_mb_min/median/max={MinMedMax(runs.Select(r => (r.PeakWs - r.BaselineWs) / 1048576.0), "F1")} "
@@ -208,6 +212,11 @@ public sealed class LargeFrameStdioTests
         failures.Should().BeEmpty("{0}", reason);
         completed.Should().Be(SeqCalls);
     }
+
+    private static int ReadSeqCalls() =>
+        int.TryParse(Environment.GetEnvironmentVariable(SeqCallsVariable), NumberStyles.None, CultureInfo.InvariantCulture, out var calls) && calls > 0
+            ? calls
+            : 5;
 
     internal static string BuildPayload(int bytes)
     {
