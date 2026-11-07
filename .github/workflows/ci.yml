@@ -103,7 +103,7 @@ jobs:
           missing=0
           while IFS= read -r -d '' meta; do
             dir="$(dirname "${meta}")"
-            if ! compgen -G "${dir}/*.nupkg" > /dev/null; then
+            if [ -z "$(find "${dir}" -maxdepth 1 -name '*.nupkg' -print -quit)" ]; then
               echo "::error::Package folder without its .nupkg: ${dir#"${NUGET_PACKAGES}/"}"
               missing=1
             fi
@@ -228,7 +228,7 @@ jobs:
           missing=0
           while IFS= read -r -d '' meta; do
             dir="$(dirname "${meta}")"
-            if ! compgen -G "${dir}/*.nupkg" > /dev/null; then
+            if [ -z "$(find "${dir}" -maxdepth 1 -name '*.nupkg' -print -quit)" ]; then
               echo "::error::Package folder without its .nupkg: ${dir#"${NUGET_PACKAGES}/"}"
               missing=1
             fi
