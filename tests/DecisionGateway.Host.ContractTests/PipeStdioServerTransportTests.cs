@@ -105,6 +105,52 @@ public sealed class PipeStdioServerTransportTests
         (await harness.ReadInboundAsync()).Should().BeOfType<JsonRpcRequest>().Which.Id.Should().Be(new RequestId(12));
     }
 
+    [Fact, Trait("Category", "Unit")]
+    public async Task ExtractImagePayload_ReplacesArgumentWithHandle_AndStoresDecodedBytes()
+    {
+        await using var harness = new Harness(new PipeStdioTransportOptions { ExtractImagePayload = true });
+        var data = new byte[300_001];
+        for (var i = 0; i < data.Length; i++)
+        {
+            data[i] = unchecked((byte)((i * 31) + 7));
+        }
+
+        var frame = Encoding.UTF8.GetBytes(
+            """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"evaluate_decision","arguments":{"question":"q","image_payload":"""
+            + "\"" + Convert.ToBase64String(data) + "\"}}}\n");
+
+        // Odd-sized chunks put segment boundaries inside base64 quads.
+        foreach (var chunk in frame.Chunk(4093))
+        {
+            await harness.WriteAsync(chunk);
+        }
+
+        var request = (await harness.ReadInboundAsync()).Should().BeOfType<JsonRpcRequest>().Subject;
+        var arguments = request.Params!["arguments"]!;
+        arguments["question"]!.GetValue<string>().Should().Be("q");
+        var handle = arguments["image_payload"]!.GetValue<string>();
+        handle.Should().StartWith(ImagePayloadExtractor.HandlePrefix);
+
+        ImagePayloadStore.TryTake(handle, out var stored).Should().BeTrue();
+        stored.Should().Equal(data);
+    }
+
+    [Fact, Trait("Category", "Unit")]
+    public async Task ExtractImagePayload_UntakenPayload_IsDiscardedWhenTheResponseIsSent()
+    {
+        await using var harness = new Harness(new PipeStdioTransportOptions { ExtractImagePayload = true });
+        var payload = Convert.ToBase64String(new byte[100_000]);
+        await harness.WriteLineAsync(
+            """{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"evaluate_decision","arguments":{"image_payload":"""
+            + "\"" + payload + "\"}}}");
+
+        var request = (JsonRpcRequest)await harness.ReadInboundAsync();
+        var handle = request.Params!["arguments"]!["image_payload"]!.GetValue<string>();
+
+        await harness.Transport.SendMessageAsync(new JsonRpcResponse { Id = request.Id, Result = null }, TestContext.Current.CancellationToken);
+        ImagePayloadStore.TryTake(handle, out _).Should().BeFalse();
+    }
+
     /// <summary>The transport over two in-memory pipes: the test writes "stdin" and reads "stdout" line by line.</summary>
     private sealed class Harness : IAsyncDisposable
     {

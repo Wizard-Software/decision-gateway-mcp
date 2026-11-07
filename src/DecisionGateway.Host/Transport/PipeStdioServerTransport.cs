@@ -45,6 +45,7 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly CancellationTokenSource _shutdownCts = new();
     private readonly ConcurrentDictionary<RequestId, byte> _toolCallsInFlight = new();
+    private readonly ConcurrentDictionary<RequestId, string> _extractedHandles = new();
     private readonly Task _readLoop;
     private int _disposed;
 
@@ -102,7 +103,14 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
 
         if (message is JsonRpcResponse or JsonRpcError)
         {
-            _toolCallsInFlight.TryRemove(((JsonRpcMessageWithId)message).Id, out _);
+            var answeredId = ((JsonRpcMessageWithId)message).Id;
+            _toolCallsInFlight.TryRemove(answeredId, out _);
+
+            // A payload the handler never took (error before the handler, unknown tool) must not stay in the store.
+            if (_extractedHandles.TryRemove(answeredId, out var handle))
+            {
+                ImagePayloadStore.Discard(handle);
+            }
         }
 
         await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -325,6 +333,16 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
             return;
         }
 
+        string? extractedHandle = null;
+        if (_options.ExtractImagePayload
+            && ImagePayloadExtractor.TryExtract(line, _readerOptions, out var rewritten, out var handle, out var payload))
+        {
+            // From here on the SDK sees a frame of a few hundred bytes; the payload waits in the store.
+            line = new ReadOnlySequence<byte>(rewritten);
+            ImagePayloadStore.Put(handle, payload);
+            extractedHandle = handle;
+        }
+
         JsonRpcMessage? message;
         try
         {
@@ -342,6 +360,11 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
             // The exception text may quote the frame: log only its type.
             var exceptionType = ex.GetType().Name;
             LogParseFailed(exceptionType);
+            if (extractedHandle is not null)
+            {
+                ImagePayloadStore.Discard(extractedHandle);
+            }
+
             var bytes = line.IsSingleSegment ? line.First : line.ToArray();
             if (TryRecoverRequestId(bytes.Span, isFinalBlock: true, out var id))
             {
@@ -354,7 +377,18 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
         if (message is null)
         {
             LogUnexpectedMessage();
+            if (extractedHandle is not null)
+            {
+                ImagePayloadStore.Discard(extractedHandle);
+            }
+
             return;
+        }
+
+        if (extractedHandle is not null)
+        {
+            // TryExtract only accepts tools/call, which deserializes to a request.
+            _extractedHandles[((JsonRpcRequest)message).Id] = extractedHandle;
         }
 
         if (message is JsonRpcRequest { Method: RequestMethods.ToolsCall } request && !TryAdmitToolCall(request.Id))
@@ -368,6 +402,10 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
         {
             // A cancelled request gets no response, so it must leave the in-flight set here.
             _toolCallsInFlight.TryRemove(cancelledId, out _);
+            if (_extractedHandles.TryRemove(cancelledId, out var cancelledHandle))
+            {
+                ImagePayloadStore.Discard(cancelledHandle);
+            }
         }
 
         inbound.Add(message);

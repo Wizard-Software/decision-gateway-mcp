@@ -31,6 +31,7 @@ internal static class HostProcess
         "DG_STDIO_TRANSPORT",
         "DG_MAX_FRAME_BYTES",
         "DG_MAX_INFLIGHT_TOOL_CALLS",
+        "DG_PIPE_EXTRACT_IMAGE",
     ];
 
     /// <summary>

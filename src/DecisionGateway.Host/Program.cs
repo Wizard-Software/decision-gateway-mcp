@@ -30,6 +30,20 @@ builder.Services
     {
         // Spike diagnostics (DG_DIAG_GC=1 only): probe the live heap shortly after this call.
         GcDiagnostics.ScheduleProbe();
+
+        // Spike variant 3(b): when the transport extracted image_payload, take the decoded bytes from the store
+        // (a real handler would use them; the spike only takes them so the store does not keep them).
+        if (context.Params?.Arguments is { } arguments
+            && arguments.TryGetValue("image_payload", out var image)
+            && image.ValueKind == System.Text.Json.JsonValueKind.String
+            // Raw bytes, no allocation: a 28 MB base64 value (variant off) must not be materialized as a string here.
+            && System.Runtime.InteropServices.JsonMarshal.GetRawUtf8Value(image).Length <= 128
+            && image.GetString() is { } handle
+            && handle.StartsWith(ImagePayloadExtractor.HandlePrefix, StringComparison.Ordinal))
+        {
+            ImagePayloadStore.TryTake(handle, out _);
+        }
+
         return SpikeTool.CallAsync(context, ct);
     });
 
