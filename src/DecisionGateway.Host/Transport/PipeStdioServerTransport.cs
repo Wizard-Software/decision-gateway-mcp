@@ -35,9 +35,6 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
     private const int ReadBufferSize = 64 * 1024;
     private const int MinimumReadSize = 16 * 1024;
 
-    /// <summary>How many leading bytes of an oversized frame are kept to recover its request id.</summary>
-    private const int IdRecoveryPrefixBytes = 4 * 1024;
-
     private static readonly byte[] NewLine = "\n"u8.ToArray();
 
     private readonly PipeReader _reader;
@@ -56,8 +53,10 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
     // Read-loop state (touched only by the read loop).
     private long _scannedBytes;
     private bool _discarding;
-    private byte[]? _oversizedPrefix;
     private long _oversizedBytes;
+
+    // Finds the id of a rejected frame anywhere in it, without keeping the frame (the C# client writes id after params).
+    private readonly TopLevelIdScanner _idScanner = new();
 
     public PipeStdioServerTransport(Stream input, Stream output, PipeStdioTransportOptions options, ILoggerFactory? loggerFactory)
         : base("Server (pipe stdio)", loggerFactory)
@@ -255,6 +254,7 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
             {
                 // The end of an oversized frame whose head has already been dropped.
                 _oversizedBytes += line.Length;
+                _idScanner.Feed(line);
                 FinishOversized(outbound);
                 continue;
             }
@@ -276,6 +276,7 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
         {
             // Drop everything up to the next newline; nothing of the oversized frame is kept in the pipe.
             _oversizedBytes += tail.Length;
+            _idScanner.Feed(tail);
             _scannedBytes = 0;
             if (isCompleted)
             {
@@ -311,8 +312,8 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
 
     private void StartOversized(ReadOnlySequence<byte> head)
     {
-        var prefixLength = (int)Math.Min(head.Length, IdRecoveryPrefixBytes);
-        _oversizedPrefix = head.Slice(0, prefixLength).ToArray();
+        _idScanner.Reset();
+        _idScanner.Feed(head);
         _oversizedBytes = head.Length;
         _discarding = true;
     }
@@ -320,12 +321,11 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
     private void FinishOversized(List<JsonRpcMessage> outbound)
     {
         LogFrameTooLarge(_oversizedBytes, _options.MaxFrameBytes);
-        if (_oversizedPrefix is not null && TryRecoverRequestId(_oversizedPrefix, isFinalBlock: false, out var id))
+        if (_idScanner.TryGetId(out var id))
         {
             outbound.Add(Error(id, (int)McpErrorCode.InvalidRequest, FrameTooLargeMessage));
         }
 
-        _oversizedPrefix = null;
         _oversizedBytes = 0;
         _discarding = false;
     }
@@ -369,8 +369,9 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
                 ImagePayloadStore.Discard(extractedHandle);
             }
 
-            var bytes = line.IsSingleSegment ? line.First : line.ToArray();
-            if (TryRecoverRequestId(bytes.Span, isFinalBlock: true, out var id))
+            _idScanner.Reset();
+            _idScanner.Feed(line);
+            if (_idScanner.TryGetId(out var id))
             {
                 outbound.Add(Error(id, (int)McpErrorCode.ParseError, ParseErrorMessage));
             }
@@ -482,69 +483,6 @@ internal sealed partial class PipeStdioServerTransport : TransportBase
         {
             id = new RequestId(number);
             return true;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Best-effort recovery of the top-level <c>id</c> of a frame that was rejected (parse error or size limit).
-    /// With <paramref name="isFinalBlock"/> false the input is only the head of the frame: values that do not fit are
-    /// treated as "id not found".
-    /// </summary>
-    internal static bool TryRecoverRequestId(ReadOnlySpan<byte> utf8, bool isFinalBlock, out RequestId id)
-    {
-        id = default;
-        try
-        {
-            var reader = new Utf8JsonReader(utf8, isFinalBlock, new JsonReaderState(new JsonReaderOptions { MaxDepth = int.MaxValue }));
-            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
-            {
-                return false;
-            }
-
-            while (reader.Read())
-            {
-                if (reader.TokenType == JsonTokenType.EndObject)
-                {
-                    return false;
-                }
-
-                if (reader.TokenType != JsonTokenType.PropertyName)
-                {
-                    continue;
-                }
-
-                var isId = reader.ValueTextEquals("id"u8);
-                if (!reader.Read())
-                {
-                    return false;
-                }
-
-                if (isId)
-                {
-                    switch (reader.TokenType)
-                    {
-                        case JsonTokenType.String:
-                            id = new RequestId(reader.GetString()!);
-                            return true;
-                        case JsonTokenType.Number when reader.TryGetInt64(out var number):
-                            id = new RequestId(number);
-                            return true;
-                        default:
-                            return false;
-                    }
-                }
-
-                if (!reader.TrySkip())
-                {
-                    return false;
-                }
-            }
-        }
-        catch (JsonException)
-        {
-            // Too malformed to locate a top-level id.
         }
 
         return false;

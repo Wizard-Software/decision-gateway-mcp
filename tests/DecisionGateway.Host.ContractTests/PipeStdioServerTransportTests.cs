@@ -49,6 +49,23 @@ public sealed class PipeStdioServerTransportTests
     }
 
     [Fact, Trait("Category", "Unit")]
+    public async Task OversizedFrame_WithIdAfterParams_IsRejectedWithThatId()
+    {
+        // The SDK C# client serializes id after params, so the id follows the whole argument text.
+        await using var harness = new Harness(new PipeStdioTransportOptions { MaxFrameBytes = 1024 });
+        var big = """{"jsonrpc":"2.0","method":"tools/call","params":{"name":"evaluate_decision","arguments":{"question":"q","image_payload":"""
+            + "\"" + new string('+', 200_000) + "\"}},\"id\":21}\n";
+        foreach (var chunk in Encoding.UTF8.GetBytes(big).Chunk(4093))
+        {
+            await harness.WriteAsync(chunk);
+        }
+
+        var error = await harness.ReadOutboundAsync();
+        error.GetProperty("id").GetInt32().Should().Be(21);
+        error.GetProperty("error").GetProperty("code").GetInt32().Should().Be(-32600);
+    }
+
+    [Fact, Trait("Category", "Unit")]
     public async Task OversizedFrame_ArrivingAsOneCompleteLine_IsRejectedWithoutParsing()
     {
         await using var harness = new Harness(new PipeStdioTransportOptions { MaxFrameBytes = 64 });
